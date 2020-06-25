@@ -28,7 +28,7 @@ done
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 HTTPDCONF=/etc/apache2/conf/httpd.conf
-TMPGENERATED="/dev/shm/$0-done"
+TMPGENERATED="/dev/shm/mailipsgenerated"
 
 if [ "$HTTPDCONF" -nt "$TMPGENERATED" ]; then
     echo $HTTPDCONF has updates
