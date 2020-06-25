@@ -1,0 +1,106 @@
+#!/bin/bash
+
+for ARG in "$@"; do
+    case "$1" in
+        -h|--help|help)
+            echo "
+# mailip generator for cPanel: https://github.com/zhubanRuban/cpgeneratemailips
+# Copyright zhubanRuban: https://github.com/zhubanRuban
+# Licensed under the Apache License 2.0: http://www.apache.org/licenses/LICENSE-2.0
+# based on https://docs.cpanel.net/knowledge-base/email/how-to-configure-the-exim-outgoing-ip-address/
+
+# Why not using 'Send mail from account’s IP address' feature in Exim Configuration Manager ?
+# Because it overwrites custom outgoing IP setup in /etc/mailips as *: customip
+
+Usage:
+
+$0 help   # show this help message
+$0 force  # generate even if there have been no updates to user domains
+$0 cron   # send message to root address if there are errors
+"; exit 1
+            ;;
+        force) FORCE=1; shift;;
+        cron)  CRON=1; shift;;
+        *)     echo $1 : no such option; exit 1;;
+    esac
+done
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+HTTPDCONF=/etc/apache2/conf/httpd.conf
+TMPGENERATED="/dev/shm/$0-done"
+
+if [ "$HTTPDCONF" -nt "$TMPGENERATED" ]; then
+    echo $HTTPDCONF has updates
+else
+    if [ ! "$FORCE" ]; then
+        echo $HTTPDCONF has NO updates, run "'$0 force'" to generate forcibly; exit 0
+    fi
+fi
+
+[ ${EUID:-$(id -u)} -eq 0 ] || { echo This script should be run with root privileges, exiting...; exit 1; }
+echo -n 'cPanel version: '; /usr/local/cpanel/cpanel -V || { echo Not found, exiting...; exit 1; }
+
+ERRMAIL=root
+MAILIPFILE=/dev/shm/mailips
+MAILHELOFILE=/dev/shm/mailhelo
+
+MAINSHAREDIP=$( grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" /var/cpanel/mainip 2>/dev/null || hostname -I | awk '{print $1}' )
+echo Main shared IP: $MAINSHAREDIP
+
+DEFAULTMAILIP=$( grep ^\*: $MAILIPFILE 2>/dev/null | grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" )
+if [ "$DEFAULTMAILIP" ]; then
+    if [ "$DEFAULTMAILIP" != "$MAINSHAREDIP" ]; then
+        echo Custom mail IP found: $DEFAULTMAILIP
+    fi
+else
+    DEFAULTMAILIP=$MAINSHAREDIP
+fi
+echo Default mail IP: $DEFAULTMAILIP
+
+DEFAULTMAILHELO=$( dig -x $DEFAULTMAILIP +short 2>/dev/null | sed 's/\.$//' )
+DEFAULTMAILHELO=${DEFAULTMAILHELO:-mail.$( hostname -f )}
+echo "Default mail HELO: $DEFAULTMAILHELO"
+echo
+
+# write mailips
+{
+    while read DOMAIN IP; do
+        if [ "$IP" != "$MAINSHAREDIP" ] && [ "$IP" != "$DEFAULTMAILIP" ]; then
+            echo $DOMAIN: $IP
+        fi
+    done < <(awk -F':|==' '{print $1, $7}' /etc/userdatadomains)
+    echo *: $DEFAULTMAILIP
+} > $MAILIPFILE; chown root:mail $MAILIPFILE; chmod 640 $MAILIPFILE; echo $MAILIPFILE written
+
+# write mailhelo
+{
+    for IP in $( awk '{print $2}' $MAILIPFILE | sort -u ); do
+        HELO=$( dig -x $IP +short 2>/dev/null | sed 's/\.$//' )
+        if [ "$HELO" ]; then
+            if [ "$HELO" != "$DEFAULTMAILHELO" ]; then
+                echo $IP: $HELO
+            fi
+            HELOIP=$( dig a $HELO +short 2>/dev/null | head -n1 )
+            if [ "$HELOIP" != "$IP" ]; then
+                HELOERR+=$'\n'"$IP resolves to $HELO, but $HELO resolves to a different address: $HELOIP"
+            fi
+        else
+            HELOSHOULDBE=$( awk -F ': ' '/ '"$( basename $( grep -l "^$IP$" /var/cpanel/mainips/* 2>/dev/null || grep -l "^IP=$IP$" /var/cpanel/users/* 2>/dev/null ) 2>/dev/null | head -n1 )"'$/ {print $1; exit}' /etc/trueuserdomains 2>/dev/null )
+            HELOERR+=$'\n'"Missing PTR: $IP: ${HELOSHOULDBE:-$DEFAULTMAILHELO}"
+        fi
+    done
+    echo *: $DEFAULTMAILHELO
+} > "$MAILHELOFILE"; chown root:mail "$MAILHELOFILE"; chmod 640 "$MAILHELOFILE"; echo "$MAILHELOFILE" written
+
+touch "$TMPGENERATED"
+
+HELOERR=$( sed '/^[[:space:]]*$/d' <<< "$HELOERR" )
+if [ "$HELOERR" ]; then echo
+    echo "$HELOERR"
+    if [ "$CRON" ]; then
+        echo "$HELOERR" | mail -s "$(hostname -f): $0: Warnings" "$ERRMAIL"
+        echo Mail sent to $ERRMAIL
+    fi
+    exit 1
+fi
