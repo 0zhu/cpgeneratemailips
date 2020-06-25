@@ -42,8 +42,8 @@ fi
 echo -n 'cPanel version: '; /usr/local/cpanel/cpanel -V || { echo Not found, exiting...; exit 1; }
 
 ERRMAIL=root
-MAILIPFILE=/dev/shm/mailips
-MAILHELOFILE=/dev/shm/mailhelo
+MAILIPFILE=/etc/mailips
+MAILHELOFILE=/etc/mailhelo
 
 MAINSHAREDIP=$( grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b" /var/cpanel/mainip 2>/dev/null || hostname -I | awk '{print $1}' )
 echo Main shared IP: $MAINSHAREDIP
@@ -94,6 +94,8 @@ echo
 } > "$MAILHELOFILE"; chown root:mail "$MAILHELOFILE"; chmod 640 "$MAILHELOFILE"; echo "$MAILHELOFILE" written
 
 touch "$TMPGENERATED"
+
+/scripts/restartsrv_exim
 
 HELOERR=$( sed '/^[[:space:]]*$/d' <<< "$HELOERR" )
 if [ "$HELOERR" ]; then echo
