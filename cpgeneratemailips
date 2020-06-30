@@ -81,9 +81,9 @@ echo
             if [ "$HELO" != "$DEFAULTMAILHELO" ]; then
                 echo $IP: $HELO
             fi
-            HELOIP=$( dig a $HELO +short 2>/dev/null | head -n1 )
-            if [ "$HELOIP" != "$IP" ]; then
-                HELOERR+=$'\n'"$IP resolves to $HELO, but $HELO resolves to a different address: $HELOIP"
+            HELOIP=$( dig a $HELO +short 2>/dev/null )
+            if ! grep -q "^$IP$" <<< "$HELOIP"; then
+                HELOERR+=$'\n'"FCrDNS check failure: $IP resolves to $HELO, but $HELO resolves to: $( echo $HELOIP )"
             fi
         else
             HELOSHOULDBE=$( awk -F ': ' '/ '"$( basename $( grep -l "^$IP$" /var/cpanel/mainips/* 2>/dev/null || grep -l "^IP=$IP$" /var/cpanel/users/* 2>/dev/null ) 2>/dev/null | head -n1 )"'$/ {print $1; exit}' /etc/trueuserdomains 2>/dev/null )
